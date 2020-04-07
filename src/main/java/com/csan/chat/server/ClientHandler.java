@@ -1,77 +1,75 @@
 package com.csan.chat.server;
 
-import java.io.IOException;
-import java.io.PrintWriter;
-import java.net.Socket;
-import java.util.Scanner;
+import java.io.*;
+import java.net.*;
 
-public class ClientHandler implements Runnable {
-    private static final int PORT = 4004;
+class ClientHandler extends Thread {
 
-    private static final String HOST = "localhost";
+    private Socket clientSocket;
+    private BufferedReader inSocket; // поток чтения из сокета
+    private BufferedWriter outSocket; // поток завписи в сокет
 
-    private Server server;
 
-    private PrintWriter outMessage;
+    public ClientHandler(Socket clientSocket) throws IOException {
+        this.clientSocket = clientSocket;
+        inSocket = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+        outSocket = new BufferedWriter(new OutputStreamWriter(clientSocket.getOutputStream()));
 
-    private Scanner inMessage;
-
-    private int clientsCount;
-
-    public ClientHandler(Socket clientSocket, Server server) {
-        try {
-            clientsCount++;
-            this.server = server;
-            this.outMessage = new PrintWriter(clientSocket.getOutputStream());
-            this.inMessage = new Scanner(clientSocket.getInputStream());
-        } catch (IOException ex) {
-            ex.printStackTrace();
-        }
+        start();
     }
 
     @Override
     public void run() {
+        String word;
         try {
-            while (true) {
-                server.sendMessageToAllClients("New member joined the chat!");
-                server.sendMessageToAllClients(clientsCount + "members.");
-                break;
+            // первое сообщение отправленное сюда - никнейм
+            word = inSocket.readLine();
+            try {
+                outSocket.write(word + "\n");
+                outSocket.flush();
+            } catch (IOException ignored) {
             }
-
-            while (true) {
-                if (inMessage.hasNext()) {
-                    String clientMessage = inMessage.nextLine();
-                    if (clientMessage.equalsIgnoreCase("**stop")) {
+            try {
+                while (true) {
+                    word = inSocket.readLine();
+                    if (word.equals("\\stop")) {
+                        this.downService();
                         break;
                     }
-                    System.out.println(clientMessage);
-                    server.sendMessageToAllClients(clientMessage);
+                    System.out.println("Echoing: " + word);
+                    for (ClientHandler vr : Server.serverList) {
+                        vr.send(word); // отослать принятое сообщение с привязанного клиента всем остальным влючая его
+                    }
                 }
-                // останавливаем выполнение потока на 100 мс
-                Thread.sleep(100);
+            } catch (NullPointerException ignored) {
             }
-        } catch (InterruptedException ex) {
-            ex.printStackTrace();
-        } finally {
-            this.leave();
+        } catch (IOException e) {
+            this.downService();
         }
     }
 
-    // отправляем сообщение
-    public void sendMsg(String msg) {
+    private void send(String message) {
         try {
-            outMessage.println(msg);
-            outMessage.flush();
-        } catch (Exception ex) {
-            ex.printStackTrace();
+            outSocket.write(message + "\n");
+            outSocket.flush();
+        } catch (IOException ignored) {
         }
     }
 
-    // клиент выходит из чата
-    public void leave() {
-        server.removeClient(this);
-        clientsCount--;
-        server.sendMessageToAllClients(clientsCount + "members");
+    private void downService() {
+        try {
+            if (!clientSocket.isClosed()) {
+                clientSocket.close();
+                inSocket.close();
+                outSocket.close();
+                for (ClientHandler vr : Server.serverList) {
+                    if (vr.equals(this)) {
+                        vr.interrupt();
+                    }
+                    Server.serverList.remove(this);
+                }
+            }
+        } catch (IOException ignored) {
+        }
     }
-
 }
